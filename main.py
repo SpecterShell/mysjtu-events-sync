@@ -208,29 +208,43 @@ def sync_events_to_caldav(events: list[dict], *, username: str, password: str, c
                 )
 
 
-def parse_args() -> argparse.Namespace:
+def add_cookie_args(parser: argparse.ArgumentParser, *, include_non_interactive: bool = False) -> None:
+    parser.add_argument("--cookie-file", default="cookies.txt", help="Path to JA cookie cache file")
+    parser.add_argument("--ja-cookie", help="JAAuthCookie value (overrides file and env)")
+    if include_non_interactive:
+        parser.add_argument(
+            "--non-interactive",
+            action="store_true",
+            help="Fail if re-login is required instead of prompting for QR code",
+        )
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sync SJTU calendar events to CalDAV")
-    parser.add_argument("--username", "-u", required=True, help="CalDAV username")
-    parser.add_argument("--password", "-p", required=True, help="CalDAV password")
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="command")
+
+    login_parser = subparsers.add_parser("login", help="Authenticate and cache JA cookie")
+    add_cookie_args(login_parser, include_non_interactive=True)
+
+    sync_parser = subparsers.add_parser("sync", help="Sync calendar events to CalDAV")
+    sync_parser.add_argument("--username", "-u", required=True, help="CalDAV username")
+    sync_parser.add_argument("--password", "-p", required=True, help="CalDAV password")
+    sync_parser.add_argument(
         "--caldav-url",
         default=None,
         help="CalDAV server URL (default: https://mail.sjtu.edu.cn/dav/{username}@sjtu.edu.cn/Calendar)",
     )
-    parser.add_argument("--calendar-name", default="交大日程", help="Target calendar name")
-    parser.add_argument("--days", type=int, default=14, help="Sync window in days before/after today")
-    parser.add_argument("--cookie-file", default="cookies.txt", help="Path to JA cookie cache file")
-    parser.add_argument("--ja-cookie", help="JAAuthCookie value (overrides file and env)")
-    parser.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Fail if re-login is required instead of prompting for QR code",
-    )
-    return parser.parse_args()
+    sync_parser.add_argument("--calendar-name", default="交大日程", help="Target calendar name")
+    sync_parser.add_argument("--days", type=int, default=14, help="Sync window in days before/after today")
+    add_cookie_args(sync_parser, include_non_interactive=True)
+
+    logout_parser = subparsers.add_parser("logout", help="Remove cached JA cookie")
+    add_cookie_args(logout_parser, include_non_interactive=False)
+
+    return parser
 
 
-def main() -> None:
-    args = parse_args()
+def run_login(args: argparse.Namespace) -> int:
     cookie_path = Path(args.cookie_file)
     explicit_cookie = args.ja_cookie or os.getenv("JA_AUTH_COOKIE")
 
@@ -238,10 +252,21 @@ def main() -> None:
     load_cached_cookies(session, cookie_path, explicit_cookie)
 
     if not ensure_login(session, cookie_path, allow_interactive=not args.non_interactive):
-        sys.exit(1)
+        return 1
+    return 0
+
+
+def run_sync(args: argparse.Namespace) -> int:
+    cookie_path = Path(args.cookie_file)
+    explicit_cookie = args.ja_cookie or os.getenv("JA_AUTH_COOKIE")
+
+    session = requests.session()
+    load_cached_cookies(session, cookie_path, explicit_cookie)
+
+    if not ensure_login(session, cookie_path, allow_interactive=not args.non_interactive):
+        return 1
 
     events = fetch_events(session, args.days)
-
     caldav_url = args.caldav_url or f"https://mail.sjtu.edu.cn/dav/{args.username}@sjtu.edu.cn/Calendar"
 
     sync_events_to_caldav(
@@ -251,6 +276,39 @@ def main() -> None:
         caldav_url=caldav_url,
         calendar_name=args.calendar_name,
     )
+    return 0
+
+
+def run_logout(args: argparse.Namespace) -> int:
+    cookie_path = Path(args.cookie_file)
+    if cookie_path.exists():
+        cookie_path.unlink()
+        print(f"🧹 已删除缓存的 Cookie 文件: {cookie_path}")
+    else:
+        print(f"🤷 未找到 Cookie 文件: {cookie_path}")
+    return 0
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return
+
+    if args.command == "login":
+        code = run_login(args)
+    elif args.command == "sync":
+        code = run_sync(args)
+    elif args.command == "logout":
+        code = run_logout(args)
+    else:
+        parser.print_help()
+        code = 1
+
+    if code:
+        sys.exit(code)
 
 
 if __name__ == "__main__":
