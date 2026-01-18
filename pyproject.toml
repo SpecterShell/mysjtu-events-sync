@@ -1,0 +1,14 @@
+[project]
+name = "mysjtu-events-sync"
+version = "0.1.0"
+description = "Sync My SJTU events to SJTU Mail calendar through CalDAV."
+requires-python = ">=3.12"
+dependencies = [
+    "caldav>=2.2.3",
+    "qrterm",
+    "requests>=2.32.5",
+    "websocket-client>=1.9.0",
+]
+
+[tool.uv.sources]
+qrterm = { git = "https://github.com/glyh/qrterm" }
